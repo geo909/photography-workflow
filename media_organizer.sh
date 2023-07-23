@@ -1,42 +1,41 @@
 #!/bin/bash
 
-# This script organizes image files based on their DateTimeOriginal metadata.
+# This Bash script is designed to either move or copy media files (photo or video, anything with exif data)
+# from a source directory to a target directory, whilst renaming the files based on their "DateTimeOriginal" 
+# metadata.
 #
-# Configuration:
-# datetime_format: Format for new filenames (strftime format). Example: "%Y%m%d_%H%M%S" for "20230723_174530"
-# extensions: Array of file extensions to process. Example: ("RAF" "JPG" "xmp")
-# The extensions are case-insensitive, i.e. the above will process both .JPG and .jpg files.
-# subdir_format: Format for subdirectories in output path (strftime format). Example: "%Y-%m" for "2023-07"
+# Renamed files are organized in subdirectories, sorted by their creation year and month. 
+# If a media file lacks the "DateTimeOriginal" metadata, the script provides options to either skip this file or to 
+# place it into a separate "uncategorized" directory. Additional features include recursive operation on the 
+# source directory, dry-run mode for previewing changes without making any modifications, and an option 
+# to delete original files after copying.
 
+# Options:
+#   -s, --source-path:      Sets the path to the source directory.
+#   -o, --output-path:      Sets the path to the target directory.
+#   -r, --recursive:        Enables the script to operate recursively on the source directory.
+#   -R, --remove-originals: Instructs the script to move files instead of copying them, effectively deleting the original files.
+#   -d, --dry-run:          Executes a dry-run where the script shows changes that would be made without actually performing them.
+#   -u, --uncategorized:    Instructs the script to place any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them.
+
+# Configuration:
 datetime_format="%Y%m%d_%H%M%S"
 extensions=("cr2" "raf" "jpg" "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
 subdir_format="%Y-%m"
 
-#
-# Usage:
-# ./script.sh --source-path SRC --output-path OUT
-#
-# Options:
-# --recursive (-r): Process directories recursively.
-# --remove-originals (-R): Remove original files (moves instead of copying).
-# --dry-run (-d): Do not perform any changes, only print what would be done.
-#
-# Short forms: -s for --source-path, -o for --output-path
-#
-# Example:
-# ./script.sh -s SRC -o OUT -r -R -d
-#
-# The script logs operations, totals, and reasons for skipping files.
-#
-# ignore.txt: A file in the same directory as the script, listing dates to be ignored (one per line).
-
-# Variables for command-line options
 recursive=0
 remove_originals=0
 dry_run=0
-help_message="Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run]"
+uncategorized=0
+
+help_message="Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run] [--verbose] [--uncategorized]"
 
 start_time=$(date +%s)
+
+# Helper function
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S'): $1"
+}
 
 # Check if any arguments were passed to the script
 if [ $# -eq 0 ]; then
@@ -45,7 +44,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # Parse command-line options
-PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRd --long "source-path:,output-path:,recursive,help,remove-originals,dry-run" -- "$@")
+PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRdu --long "source-path:,output-path:,recursive,help,remove-originals,dry-run" -- "$@")
 
 eval set -- "$PARSED_ARGUMENTS"
 
@@ -55,6 +54,7 @@ while true; do
     -o|--output-path) output_path="$2"; shift 2;;
     -r|--recursive) recursive=1; shift;;
     -h|--help) echo $help_message; exit 0;;
+    -u|--uncategorized) uncategorized=1; shift;;
     -R|--remove-originals)
         echo "You have opted to remove original files. Are you sure? (y/n)"
         read confirmation
@@ -73,7 +73,7 @@ done
 
 # Check if source path is a directory
 if [[ ! -d $source_path ]]; then
-  echo "Error: Source path does not exist or is not a directory"
+  log "Error: Source path does not exist or is not a directory"
   exit 1
 fi
 
@@ -82,12 +82,22 @@ if [[ ! -d $output_path ]]; then
   if [[ $dry_run -eq 0 ]]; then
     mkdir -p "$output_path"
     if [[ $? -ne 0 ]]; then
-      echo "Error: Failed to create output directory"
+      log "Error: Failed to create output directory"
       exit 1
     fi
   else
     echo "Would create directory: $output_path"
   fi
+fi
+
+
+# Create array with ignored prefixes
+ignore_file="$source_path/ignore.txt"
+ignore_list=()
+if [[ -f $ignore_file ]]; then
+  while IFS= read -r line; do
+    ignore_list+=("$line")
+  done < "$ignore_file"
 fi
 
 # Create arrays with files
@@ -113,6 +123,7 @@ count=0
 renamed=0
 skipped_target_exists=0
 skipped_no_datetime=0
+skipped_ignore_txt=0
 
 # Output start message
 echo "Starting operation..."
@@ -124,13 +135,38 @@ echo "------------------------"
 # Iterate over each file in the list
 for file in "${file_list[@]}"; do
   datetime=$(exiftool -s3 -d "$datetime_format" -DateTimeOriginal "$file")
+
+  # Skip if file is in ignore list
+  if [[ " ${ignore_list[@]} " =~ " ${datetime} " ]]; then
+    log "Ignored $file due to entry in ignore.txt"
+    ((skipped_ignore_txt++))
+    continue
+  fi
+
+
   if [[ "$datetime" == "" ]]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to lack of DateTimeOriginal ($(($count+1))/$total_files)" 
-    echo "$file" >> skipped_no_datetime.log
-    ((skipped_no_datetime++))
+    if [[ $uncategorized -eq 1 ]]; then
+      relative_path="${file#$source_path/}"
+      output_dir="$output_path/uncategorized/${relative_path%/*}"
+      
+      if [[ ! -d "$output_dir" && $dry_run -eq 0 ]]; then
+        mkdir -p "$output_dir"
+      fi
+
+      if [[ $dry_run -eq 0 ]]; then
+        cp -n "$file" "$output_dir"
+
+      else
+        echo "Would copy $file to $output_dir"
+      fi
+    else
+      log "Skipped $file due to lack of DateTimeOriginal" 
+      ((skipped_no_datetime++))
+    fi
     ((count++))
     continue
   fi
+
   output_subdir=$(exiftool -s3 -d "$subdir_format" -DateTimeOriginal "$file")
 
   # Check if output subdirectory exists, create it if not
@@ -141,47 +177,30 @@ for file in "${file_list[@]}"; do
   ext=${file##*.}
   new_name="${datetime,,}.$(echo $ext | awk '{print tolower($0)}')"
 
+  # Check if target file already exists
+  target_path="$output_path/$output_subdir/$new_name"
+  if [[ -e "$target_path" ]]; then
+    log "Skipped $file due to existing target file"
+    ((skipped_target_exists++))
+    continue
+  fi
+
   # Use mv instead of cp when remove_originals option is used
   if [[ $remove_originals -eq 0 ]]; then
     if [[ $dry_run -eq 0 ]]; then
-
-
-      # Try copying the file without overwriting an existing file
-      cp_output=$(echo "" | cp -iv "$file" "$output_path/$output_subdir/$new_name" 2>&1)
-      cp_status=$?
-
-      if [[ $cp_status -eq 0 ]]; then
-          # cp was successful
-          echo "$(date '+%Y-%m-%d %H:%M:%S'): Copied $file to $output_path/$output_subdir/$new_name ($(($count+1))/$total_files)"
-          ((renamed++))
-      elif echo $cp_output | grep -q "are the same file"; then
-          # cp failed because the file already exists
-          echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to existing target ($(($count+1))/$total_files)"
-          ((skipped_target_exists++))
-      else
-          # cp failed for some other reason
-          echo "$(date '+%Y-%m-%d %H:%M:%S'): Error copying $file ($(($count+1))/$total_files)"
-
-          error_log="$(date '+%Y-%m-%d %H:%M:%S'): $cp_output"
-          echo $error_log
-          echo "$error_log" >> errors.log
-      fi
+      cp "$file" "$target_path"
+      log "Copied $file to $target_path"
+      ((renamed++))
     else
-      echo "Would copy $file to $output_path/$output_subdir/$new_name"
+      echo "Would copy $file to $target_path"
     fi
   else
     if [[ $dry_run -eq 0 ]]; then
-      mv_output=$(mv -vn "$file" "$output_path/$output_subdir/$new_name")
-      # Check if mv actually renamed the file
-      if [[ -z $mv_output ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to existing target ($(($count+1))/$total_files)"
-        ((skipped_target_exists++))
-      else
-        echo "$(date '+%Y-%m-%d %H:%M:%S'): $mv_output ($(($count+1))/$total_files)"
-        ((renamed++))
-      fi
+      mv "$file" "$target_path"
+      log "Moved $file to $target_path"
+      ((renamed++))
     else
-      echo "Would move $file to $output_path/$output_subdir/$new_name"
+      echo "Would move $file to $target_path"
     fi
   fi
   ((count++))
@@ -194,10 +213,10 @@ hours=$(( elapsed_seconds / 3600 ))
 minutes=$(( (elapsed_seconds % 3600) / 60 ))
 seconds=$(( elapsed_seconds % 60 ))
 
-# Output end message
-echo "------------------------"
-echo "Finished processing."
-echo "Total files renamed: $renamed"
-echo "Total files skipped due to existing target: $skipped_target_exists"
-echo "Total files skipped due to lack of DateTimeOriginal: $skipped_no_datetime"
-echo "Time elapsed: $hours hour(s) $minutes minute(s) $seconds second(s)"
+log "------------------------"
+log "Finished processing."
+log "Total files renamed: $renamed"
+log "Total files skipped due to existing target: $skipped_target_exists"
+log "Total files skipped due to lack of DateTimeOriginal: $skipped_no_datetime"
+log "Total files skipped due to their datetime being in ignore.txt: $skipped_ignore_txt"
+log "Time elapsed: $hours hour(s) $minutes minute(s) $seconds second(s)"
