@@ -5,6 +5,7 @@
 # Configuration:
 # datetime_format: Format for new filenames (strftime format). Example: "%Y%m%d_%H%M%S" for "20230723_174530"
 # extensions: Array of file extensions to process. Example: ("RAF" "JPG" "xmp")
+# The extensions are case-insensitive, i.e. the above will process both .JPG and .jpg files.
 # subdir_format: Format for subdirectories in output path (strftime format). Example: "%Y-%m" for "2023-07"
 
 datetime_format="%Y%m%d_%H%M%S"
@@ -17,13 +18,13 @@ subdir_format="%Y-%m"
 #
 # Options:
 # --recursive (-r): Process directories recursively.
-# --keep-originals (-k): Keep original files (copies instead of moving).
+# --remove-originals (-R): Remove original files (moves instead of copying).
 # --dry-run (-d): Do not perform any changes, only print what would be done.
 #
 # Short forms: -s for --source-path, -o for --output-path
 #
 # Example:
-# ./script.sh -s SRC -o OUT -r -k -d
+# ./script.sh -s SRC -o OUT -r -R -d
 #
 # The script logs operations, totals, and reasons for skipping files.
 #
@@ -31,9 +32,9 @@ subdir_format="%Y-%m"
 
 # Variables for command-line options
 recursive=0
-keep_originals=0
+remove_originals=0
 dry_run=0
-help_message="Usage: $0 --source-path source_path --output-path output_path [--recursive] [--keep-originals] [--dry-run]"
+help_message="Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run]"
 
 start_time=$(date +%s)
 
@@ -44,7 +45,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # Parse command-line options
-PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhkd --long "source-path:,output-path:,recursive,help,keep-originals,dry-run" -- "$@")
+PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRd --long "source-path:,output-path:,recursive,help,remove-originals,dry-run" -- "$@")
 
 eval set -- "$PARSED_ARGUMENTS"
 
@@ -54,7 +55,16 @@ while true; do
     -o|--output-path) output_path="$2"; shift 2;;
     -r|--recursive) recursive=1; shift;;
     -h|--help) echo $help_message; exit 0;;
-    -k|--keep-originals) keep_originals=1; shift;;
+    -R|--remove-originals)
+        echo "You have opted to remove original files. Are you sure? (y/n)"
+        read confirmation
+        if [[ $confirmation == "y" || $confirmation == "Y" ]]; then
+            remove_originals=1 
+        else
+            echo "Cancelling operation.."
+            exit
+        fi
+        shift;;
     -d|--dry-run) dry_run=1; shift;;
     --) shift; break;;
     *) echo "Invalid option -$OPTARG" >&2; exit 1;;
@@ -131,17 +141,30 @@ for file in "${file_list[@]}"; do
   ext=${file##*.}
   new_name="${datetime,,}.$(echo $ext | awk '{print tolower($0)}')"
 
-  # Use cp instead of mv when keep_originals option is used
-  if [[ $keep_originals -eq 1 ]]; then
+  # Use mv instead of cp when remove_originals option is used
+  if [[ $remove_originals -eq 0 ]]; then
     if [[ $dry_run -eq 0 ]]; then
-      cp_output=$(cp -vn "$file" "$output_path/$output_subdir/$new_name")
-      # Check if cp actually copied the file
-      if [[ -z $cp_output ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to existing target ($(($count+1))/$total_files)"
-        ((skipped_target_exists++))
+
+
+      # Try copying the file without overwriting an existing file
+      cp_output=$(echo "" | cp -iv "$file" "$output_path/$output_subdir/$new_name" 2>&1)
+      cp_status=$?
+
+      if [[ $cp_status -eq 0 ]]; then
+          # cp was successful
+          echo "$(date '+%Y-%m-%d %H:%M:%S'): Copied $file to $output_path/$output_subdir/$new_name ($(($count+1))/$total_files)"
+          ((renamed++))
+      elif echo $cp_output | grep -q "are the same file"; then
+          # cp failed because the file already exists
+          echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to existing target ($(($count+1))/$total_files)"
+          ((skipped_target_exists++))
       else
-        echo "$(date '+%Y-%m-%d %H:%M:%S'): $cp_output ($(($count+1))/$total_files)"
-        ((renamed++))
+          # cp failed for some other reason
+          echo "$(date '+%Y-%m-%d %H:%M:%S'): Error copying $file ($(($count+1))/$total_files)"
+
+          error_log="$(date '+%Y-%m-%d %H:%M:%S'): $cp_output"
+          echo $error_log
+          echo "$error_log" >> errors.log
       fi
     else
       echo "Would copy $file to $output_path/$output_subdir/$new_name"
