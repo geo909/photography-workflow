@@ -15,16 +15,17 @@ subdir_format="%Y-%m"
 
 #
 # Usage:
-# ./this_script.sh --source-path SRC --output-path OUT
+# ./script.sh --source-path SRC --output-path OUT
 #
 # Options:
 # --recursive (-r): Process directories recursively.
 # --keep-originals (-k): Keep original files (copies instead of moving).
+# --dry-run (-d): Do not perform any changes, only print what would be done.
 #
 # Short forms: -s for --source-path, -o for --output-path
 #
 # Example:
-# ./this_script.sh -s SRC -o OUT -r -k
+# ./script.sh -s SRC -o OUT -r -k -d
 #
 # The script logs operations, totals, and reasons for skipping files.
 #
@@ -33,9 +34,10 @@ subdir_format="%Y-%m"
 # Variables for command-line options
 recursive=0
 keep_originals=0
+dry_run=0
 
 # Parse command-line options
-PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhk --long "source-path:,output-path:,recursive,help,keep-originals" -- "$@")
+PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhkd --long "source-path:,output-path:,recursive,help,keep-originals,dry-run" -- "$@")
 
 eval set -- "$PARSED_ARGUMENTS"
 
@@ -44,8 +46,9 @@ while true; do
     -s|--source-path) source_path="$2"; shift 2;;
     -o|--output-path) output_path="$2"; shift 2;;
     -r|--recursive) recursive=1; shift;;
-    -h|--help) echo "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--keep-originals]"; exit 0;;
+    -h|--help) echo "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--keep-originals] [--dry-run]"; exit 0;;
     -k|--keep-originals) keep_originals=1; shift;;
+    -d|--dry-run) dry_run=1; shift;;
     --) shift; break;;
     *) echo "Invalid option -$OPTARG" >&2; exit 1;;
   esac
@@ -86,7 +89,8 @@ echo "------------------------"
 for file in "${file_list[@]}"; do
   datetime=$(exiftool -s3 -d "$datetime_format" -DateTimeOriginal "$file")
   if [[ "$datetime" == "" ]]; then
-    echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $(basename $file) due to lack of DateTimeOriginal ($(($count+1))/$total_files)"
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to lack of DateTimeOriginal ($(($count+1))/$total_files)" 
+    echo "$file" >> skipped_no_datetime.log
     ((skipped_no_datetime++))
     ((count++))
     continue
@@ -94,29 +98,39 @@ for file in "${file_list[@]}"; do
   output_subdir=$(exiftool -s3 -d "$subdir_format" -DateTimeOriginal "$file")
   ext=${file##*.}
   new_name="${datetime,,}.$(echo $ext | awk '{print tolower($0)}')"
-
-  mkdir -p "$output_path/$output_subdir"
+  
+  if [[ $dry_run -eq 0 ]]; then
+    mkdir -p "$output_path/$output_subdir"
+  fi
 
   # Use cp instead of mv when keep_originals option is used
   if [[ $keep_originals -eq 1 ]]; then
-    cp_output=$(cp -vn "$file" "$output_path/$output_subdir/$new_name")
-    # Check if cp actually copied the file
-    if [[ -z $cp_output ]]; then
-      echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $(basename $file) due to existing target ($(($count+1))/$total_files)"
-      ((skipped_target_exists++))
+    if [[ $dry_run -eq 0 ]]; then
+      cp_output=$(cp -vn "$file" "$output_path/$output_subdir/$new_name")
+      # Check if cp actually copied the file
+      if [[ -z $cp_output ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to existing target ($(($count+1))/$total_files)"
+        ((skipped_target_exists++))
+      else
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): $cp_output ($(($count+1))/$total_files)"
+        ((renamed++))
+      fi
     else
-      echo "$(date '+%Y-%m-%d %H:%M:%S'): $cp_output ($(($count+1))/$total_files)"
-      ((renamed++))
+      echo "Would copy $file to $output_path/$output_subdir/$new_name"
     fi
   else
-    mv_output=$(mv -vn "$file" "$output_path/$output_subdir/$new_name")
-    # Check if mv actually renamed the file
-    if [[ -z $mv_output ]]; then
-      echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $(basename $file) due to existing target ($(($count+1))/$total_files)"
-      ((skipped_target_exists++))
+    if [[ $dry_run -eq 0 ]]; then
+      mv_output=$(mv -vn "$file" "$output_path/$output_subdir/$new_name")
+      # Check if mv actually renamed the file
+      if [[ -z $mv_output ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): Skipped $file due to existing target ($(($count+1))/$total_files)"
+        ((skipped_target_exists++))
+      else
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): $mv_output ($(($count+1))/$total_files)"
+        ((renamed++))
+      fi
     else
-      echo "$(date '+%Y-%m-%d %H:%M:%S'): $mv_output ($(($count+1))/$total_files)"
-      ((renamed++))
+      echo "Would move $file to $output_path/$output_subdir/$new_name"
     fi
   fi
   ((count++))
