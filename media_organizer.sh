@@ -23,6 +23,9 @@ datetime_format="%Y%m%d_%H%M%S"
 extensions=("cr2" "raf" "jpg" "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
 subdir_format="%Y-%m"
 
+# Create arrays with files
+file_list=()
+
 recursive=0
 remove_originals=0
 dry_run=0
@@ -86,7 +89,7 @@ if [[ ! -d $output_path ]]; then
       exit 1
     fi
   else
-    echo "Would create directory: $output_path"
+    log "Would create directory: $output_path"
   fi
 fi
 
@@ -126,19 +129,21 @@ skipped_no_datetime=0
 skipped_ignore_txt=0
 
 # Output start message
-echo "Starting operation..."
 echo "Source directory: $source_path"
 echo "Output directory: $output_path"
 echo "Total number of files to process: $total_files"
 echo "------------------------"
+log "Starting operation..."
+
 
 # Iterate over each file in the list
 for file in "${file_list[@]}"; do
+  ((count++))
   datetime=$(exiftool -s3 -d "$datetime_format" -DateTimeOriginal "$file")
 
   # Skip if file is in ignore list
   if [[ " ${ignore_list[@]} " =~ " ${datetime} " ]]; then
-    log "Ignored $file due to entry in ignore.txt"
+      log "Ignored $file due to entry in ignore.txt ($count/$total_files)"
     ((skipped_ignore_txt++))
     continue
   fi
@@ -157,13 +162,12 @@ for file in "${file_list[@]}"; do
         cp -n "$file" "$output_dir"
 
       else
-        echo "Would copy $file to $output_dir"
+        log "Would copy $file to $output_dir ($count/$total_files)"
       fi
     else
-      log "Skipped $file due to lack of DateTimeOriginal" 
+      log "Skipped $file due to lack of DateTimeOriginal ($count/$total_files)" 
       ((skipped_no_datetime++))
     fi
-    ((count++))
     continue
   fi
 
@@ -180,7 +184,7 @@ for file in "${file_list[@]}"; do
   # Check if target file already exists
   target_path="$output_path/$output_subdir/$new_name"
   if [[ -e "$target_path" ]]; then
-    log "Skipped $file due to existing target file"
+    log "Skipped $file due to existing target file ($count/$total_files)"
     ((skipped_target_exists++))
     continue
   fi
@@ -189,21 +193,20 @@ for file in "${file_list[@]}"; do
   if [[ $remove_originals -eq 0 ]]; then
     if [[ $dry_run -eq 0 ]]; then
       cp "$file" "$target_path"
-      log "Copied $file to $target_path"
+      log "Copied $file to $target_path ($count/$total_files)"
       ((renamed++))
     else
-      echo "Would copy $file to $target_path"
+      log "Would copy $file to $target_path ($count/$total_files)"
     fi
   else
     if [[ $dry_run -eq 0 ]]; then
       mv "$file" "$target_path"
-      log "Moved $file to $target_path"
+      log "Moved $file to $target_path ($count/$total_files)"
       ((renamed++))
     else
-      echo "Would move $file to $target_path"
+      log "Would move $file to $target_path ($count/$total_files)"
     fi
   fi
-  ((count++))
 done
 
 # Calculate time elapsed
@@ -213,10 +216,10 @@ hours=$(( elapsed_seconds / 3600 ))
 minutes=$(( (elapsed_seconds % 3600) / 60 ))
 seconds=$(( elapsed_seconds % 60 ))
 
-log "------------------------"
-log "Finished processing."
-log "Total files renamed: $renamed"
-log "Total files skipped due to existing target: $skipped_target_exists"
-log "Total files skipped due to lack of DateTimeOriginal: $skipped_no_datetime"
-log "Total files skipped due to their datetime being in ignore.txt: $skipped_ignore_txt"
-log "Time elapsed: $hours hour(s) $minutes minute(s) $seconds second(s)"
+echo "------------------------"
+echo "Finished processing."
+echo "Total files renamed: $renamed"
+echo "Total files skipped due to existing target: $skipped_target_exists"
+echo "Total files skipped due to lack of DateTimeOriginal: $skipped_no_datetime"
+echo "Total files skipped due to their datetime being in ignore.txt: $skipped_ignore_txt"
+echo "Time elapsed: $hours hour(s) $minutes minute(s) $seconds second(s)"
