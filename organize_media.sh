@@ -2,7 +2,6 @@
 
 # This script organizes image files based on their DateTimeOriginal metadata.
 # It was created with the help of chatgpt
-# https://chat.openai.com/share/fd1bfc92-608b-4ae5-9c25-5398b2088b05
 #
 # Configuration:
 # datetime_format: Format for new filenames (strftime format). Example: "%Y%m%d_%H%M%S" for "20230723_174530"
