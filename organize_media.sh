@@ -10,7 +10,7 @@
 # subdir_format: Format for subdirectories in output path (strftime format). Example: "%Y-%m" for "2023-07"
 
 datetime_format="%Y%m%d_%H%M%S"
-extensions=("cr2" "raf" "jpg", "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
+extensions=("cr2" "raf" "jpg" "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
 subdir_format="%Y-%m"
 
 #
@@ -35,6 +35,13 @@ subdir_format="%Y-%m"
 recursive=0
 keep_originals=0
 dry_run=0
+help_message="Usage: $0 --source-path source_path --output-path output_path [--recursive] [--keep-originals] [--dry-run]"
+
+# Check if any arguments were passed to the script
+if [ $# -eq 0 ]; then
+  echo $help_message
+  exit 0
+fi
 
 # Parse command-line options
 PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhkd --long "source-path:,output-path:,recursive,help,keep-originals,dry-run" -- "$@")
@@ -46,13 +53,32 @@ while true; do
     -s|--source-path) source_path="$2"; shift 2;;
     -o|--output-path) output_path="$2"; shift 2;;
     -r|--recursive) recursive=1; shift;;
-    -h|--help) echo "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--keep-originals] [--dry-run]"; exit 0;;
+    -h|--help) echo $help_message; exit 0;;
     -k|--keep-originals) keep_originals=1; shift;;
     -d|--dry-run) dry_run=1; shift;;
     --) shift; break;;
     *) echo "Invalid option -$OPTARG" >&2; exit 1;;
   esac
 done
+
+# Check if source path is a directory
+if [[ ! -d $source_path ]]; then
+  echo "Error: Source path does not exist or is not a directory"
+  exit 1
+fi
+
+# Check if output path is a directory
+if [[ ! -d $output_path ]]; then
+  if [[ $dry_run -eq 0 ]]; then
+    mkdir -p "$output_path"
+    if [[ $? -ne 0 ]]; then
+      echo "Error: Failed to create output directory"
+      exit 1
+    fi
+  else
+    echo "Would create directory: $output_path"
+  fi
+fi
 
 # Create arrays with files
 file_list=()
@@ -96,12 +122,14 @@ for file in "${file_list[@]}"; do
     continue
   fi
   output_subdir=$(exiftool -s3 -d "$subdir_format" -DateTimeOriginal "$file")
-  ext=${file##*.}
-  new_name="${datetime,,}.$(echo $ext | awk '{print tolower($0)}')"
-  
-  if [[ $dry_run -eq 0 ]]; then
+
+  # Check if output subdirectory exists, create it if not
+  if [[ ! -d "$output_path/$output_subdir" && $dry_run -eq 0 ]]; then
     mkdir -p "$output_path/$output_subdir"
   fi
+
+  ext=${file##*.}
+  new_name="${datetime,,}.$(echo $ext | awk '{print tolower($0)}')"
 
   # Use cp instead of mv when keep_originals option is used
   if [[ $keep_originals -eq 1 ]]; then
