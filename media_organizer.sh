@@ -16,7 +16,7 @@
 #   -r, --recursive:        Enables the script to operate recursively on the source directory.
 #   -R, --remove-originals: Instructs the script to move files instead of copying them, effectively deleting the original files.
 #   -d, --dry-run:          Executes a dry-run where the script shows changes that would be made without actually performing them.
-#   -u, --uncategorized:    Instructs the script to place any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them.
+#   -u, --include-uncategorized:    Instructs the script to place any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them.
 
 # Configuration:
 datetime_format="%Y%m%d_%H%M%S"
@@ -31,7 +31,16 @@ remove_originals=0
 dry_run=0
 uncategorized=0
 
-help_message="Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run] [--verbose] [--uncategorized]"
+help_message() {
+  echo -e "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run] [--verbose] [--include-uncategorized]"
+  echo -e ""
+  echo -e "  -s, --source-path: Sets the path to the source directory."
+  echo -e "  -o, --output-path: Sets the path to the target directory."
+  echo -e "  -r, --recursive: Enables the script to operate recursively on the source directory."
+  echo -e "  -R, --remove-originals: Moves files instead of copying them, effectively deleting the original files."
+  echo -e "  -d, --dry-run: Executes a dry-run where the script shows changes that would be made without actually performing them."
+  echo -e "  -u, --include-uncategorized: Places any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them."
+}
 
 start_time=$(date +%s)
 
@@ -42,7 +51,7 @@ log() {
 
 # Check if any arguments were passed to the script
 if [ $# -eq 0 ]; then
-  echo $help_message
+  help_message
   exit 0
 fi
 
@@ -56,8 +65,8 @@ while true; do
     -s|--source-path) source_path="$2"; shift 2;;
     -o|--output-path) output_path="$2"; shift 2;;
     -r|--recursive) recursive=1; shift;;
-    -h|--help) echo $help_message; exit 0;;
-    -u|--uncategorized) uncategorized=1; shift;;
+    -h|--help) help_message; exit 0;;
+    -u|--include-uncategorized) uncategorized=1; shift;;
     -R|--remove-originals)
         echo "You have opted to remove original files. Are you sure? (y/n)"
         read confirmation
