@@ -10,14 +10,6 @@
 # source directory, dry-run mode for previewing changes without making any modifications, and an option 
 # to delete original files after copying.
 
-# Options:
-#   -s, --source-path:      Sets the path to the source directory.
-#   -o, --output-path:      Sets the path to the target directory.
-#   -r, --recursive:        Enables the script to operate recursively on the source directory.
-#   -R, --remove-originals: Instructs the script to move files instead of copying them, effectively deleting the original files.
-#   -d, --dry-run:          Executes a dry-run where the script shows changes that would be made without actually performing them.
-#   -u, --include-uncategorized:    Instructs the script to place any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them.
-
 # Configuration:
 datetime_format="%Y%m%d_%H%M%S"
 extensions=("cr2" "raf" "jpg" "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
@@ -56,7 +48,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # Parse command-line options
-PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRdu --long "source-path:,output-path:,recursive,help,remove-originals,dry-run" -- "$@")
+PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRdu --long "source-path:,output-path:,recursive,help,remove-originals,include-uncategorized,dry-run" -- "$@")
 
 eval set -- "$PARSED_ARGUMENTS"
 
