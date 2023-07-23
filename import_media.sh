@@ -10,7 +10,7 @@
 # subdir_format: Format for subdirectories in output path (strftime format). Example: "%Y-%m" for "2023-07"
 
 datetime_format="%Y%m%d_%H%M%S"
-extensions=("CR2" "RAF" "JPG" "xmp")
+extensions=("cr2" "raf" "jpg", "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
 subdir_format="%Y-%m"
 
 #
