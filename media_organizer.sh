@@ -22,9 +22,10 @@ recursive=0
 remove_originals=0
 dry_run=0
 uncategorized=0
+overwrite=0
 
 help_message() {
-  echo -e "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run] [--verbose] [--include-uncategorized]"
+  echo -e "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run] [--verbose] [--include-uncategorized] [--overwrite]"
   echo -e ""
   echo -e "  -s, --source-path: Sets the path to the source directory."
   echo -e "  -o, --output-path: Sets the path to the target directory."
@@ -32,6 +33,7 @@ help_message() {
   echo -e "  -R, --remove-originals: Moves files instead of copying them, effectively deleting the original files."
   echo -e "  -d, --dry-run: Executes a dry-run where the script shows changes that would be made without actually performing them."
   echo -e "  -u, --include-uncategorized: Places any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them."
+  echo -e "  -O, --overwrite: Overwrites files of the same target name. Otherwise, a hash is appended in the basename"
 }
 
 start_time=$(date +%s)
@@ -48,7 +50,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # Parse command-line options
-PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRdu --long "source-path:,output-path:,recursive,help,remove-originals,include-uncategorized,dry-run" -- "$@")
+PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRduO --long "source-path:,output-path:,recursive,help,remove-originals,include-uncategorized,dry-run,overwrite" -- "$@")
 
 eval set -- "$PARSED_ARGUMENTS"
 
@@ -70,6 +72,7 @@ while true; do
         fi
         shift;;
     -d|--dry-run) dry_run=1; shift;;
+    -O|--overwrite) overwrite=1; shift;;
     --) shift; break;;
     *) echo "Invalid option -$OPTARG" >&2; exit 1;;
   esac
@@ -83,19 +86,23 @@ fi
 
 # Check if output path is a directory
 if [[ ! -d $output_path ]]; then
+  message="Created directory $output_path"
   if [[ $dry_run -eq 0 ]]; then
     mkdir -p "$output_path"
+    log $message
     if [[ $? -ne 0 ]]; then
       log "Error: Failed to create output directory"
       exit 1
     fi
   else
-    log "Would create directory: $output_path"
+    log "$message (dryrun)"
   fi
 fi
 
 
 # Create array with ignored prefixes
+## BUG! When there is no ignore.txt and a file does not have a datetime
+## it is being ignored. Like having "null" in the ignore.txt is the date.
 ignore_file="$source_path/ignore.txt"
 ignore_list=()
 if [[ -f $ignore_file ]]; then
@@ -149,21 +156,22 @@ for file in "${file_list[@]}"; do
     continue
   fi
 
-
   if [[ "$datetime" == "" ]]; then
     if [[ $uncategorized -eq 1 ]]; then
-      relative_path="${file#$source_path/}"
-      output_dir="$output_path/uncategorized/${relative_path%/*}"
+      relative_dir="${file%/*}"
+      relative_path="${relative_dir#$source_path/}"
+      output_dir="$output_path/uncategorized/$relative_path"
+      message="$file ---> $output_dir ($count/$total_files)"
       
       if [[ ! -d "$output_dir" && $dry_run -eq 0 ]]; then
         mkdir -p "$output_dir"
       fi
-
+  
       if [[ $dry_run -eq 0 ]]; then
         cp -n "$file" "$output_dir"
-
+        log "$message"
       else
-        log "Would copy $file to $output_dir ($count/$total_files)"
+        log "$message (dryrun)"
       fi
     else
       log "Skipped $file due to lack of DateTimeOriginal ($count/$total_files)" 
@@ -185,27 +193,44 @@ for file in "${file_list[@]}"; do
   # Check if target file already exists
   target_path="$output_path/$output_subdir/$new_name"
   if [[ -e "$target_path" ]]; then
-    log "Skipped $file due to existing target file ($count/$total_files)"
-    ((skipped_target_exists++))
-    continue
+    if [[ $overwrite -eq 0 ]]; then # if overwrite is set to 0, use the new behavior
+      original_checksum=$(md5sum "$file" | cut -d " " -f 1)
+      target_checksum=$(md5sum "$target_path" | cut -d " " -f 1)
+  
+      # Check if checksums match
+      if [[ "$original_checksum" == "$target_checksum" ]]; then
+        log "Skipped $file due to identical file already exists ($count/$total_files)"
+        ((skipped_target_exists++))
+        continue
+      else
+        # Use the last 6 characters of the md5 checksum as a suffix for the new filename
+        suffix="${original_checksum: -8}"
+        new_name="${datetime,,}_$suffix.$(echo $ext | awk '{print tolower($0)}')"
+        target_path="$output_path/$output_subdir/$new_name"
+      fi
+    else
+      log "Skipped $file due to existing target file ($count/$total_files)"
+      ((skipped_target_exists++))
+      continue
+    fi
   fi
 
-  # Use mv instead of cp when remove_originals option is used
   if [[ $remove_originals -eq 0 ]]; then
     if [[ $dry_run -eq 0 ]]; then
-      cp "$file" "$target_path"
-      log "Copied $file to $target_path ($count/$total_files)"
+      message="$file ---> $target_path ($count/$total_files)"
+      cp -n "$file" "$target_path"
+      log "$message"
       ((renamed++))
     else
-      log "Would copy $file to $target_path ($count/$total_files)"
+      log "$message (dryrun)"
     fi
   else
     if [[ $dry_run -eq 0 ]]; then
-      mv "$file" "$target_path"
-      log "Moved $file to $target_path ($count/$total_files)"
+      mv -n "$file" "$target_path"
+      log "$message"
       ((renamed++))
     else
-      log "Would move $file to $target_path ($count/$total_files)"
+      log "$message (dryrun)"
     fi
   fi
 done
