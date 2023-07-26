@@ -7,33 +7,31 @@
 # Renamed files are organized in subdirectories, sorted by their creation year and month. 
 # If a media file lacks the "DateTimeOriginal" metadata, the script provides options to either skip this file or to 
 # place it into a separate "uncategorized" directory. Additional features include recursive operation on the 
-# source directory, dry-run mode for previewing changes without making any modifications, and an option 
-# to delete original files after copying.
+# source directory, dry-run mode for previewing changes without making any modifications.
 
 # Configuration:
 datetime_format="%Y%m%d_%H%M%S"
-extensions=("cr2" "raf" "jpg" "xmp" "mov" "avi" "png" "wmv" "mp4" "vob")
+extensions=("cr2" "raf" "jpg" "mov" "avi" "png" "wmv" "mp4" "vob")
+extensions_raw=("cr2" "raf")
 subdir_format="%Y-%m"
 
 # Create arrays with files
 file_list=()
 
 recursive=0
-remove_originals=0
 dry_run=0
 uncategorized=0
-overwrite=0
+skip_duplicates=0
 
 help_message() {
-  echo -e "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--remove-originals] [--dry-run] [--verbose] [--include-uncategorized] [--overwrite]"
+  echo -e "Usage: $0 --source-path source_path --output-path output_path [--recursive] [--dry-run] [--verbose] [--include-uncategorized] [--skip-duplicates]"
   echo -e ""
   echo -e "  -s, --source-path: Sets the path to the source directory."
   echo -e "  -o, --output-path: Sets the path to the target directory."
   echo -e "  -r, --recursive: Enables the script to operate recursively on the source directory."
-  echo -e "  -R, --remove-originals: Moves files instead of copying them, effectively deleting the original files."
   echo -e "  -d, --dry-run: Executes a dry-run where the script shows changes that would be made without actually performing them."
   echo -e "  -u, --include-uncategorized: Places any files lacking 'DateTimeOriginal' metadata in an 'uncategorized' directory instead of skipping them."
-  echo -e "  -O, --overwrite: Overwrites files of the same target name. Otherwise, a hash is appended in the basename"
+  echo -e "  -S, --skip-duplicates: If a file of the same name exists in the target, this option will skip the move operation. By default, files are compared by their hashes and if different, a hash is appended to the new file's basename."
 }
 
 start_time=$(date +%s)
@@ -50,7 +48,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # Parse command-line options
-PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRduO --long "source-path:,output-path:,recursive,help,remove-originals,include-uncategorized,dry-run,overwrite" -- "$@")
+PARSED_ARGUMENTS=$(getopt -n "$0" -o s:o:rhRduO --long "source-path:,output-path:,recursive,help,include-uncategorized,dry-run,skip-duplicates" -- "$@")
 
 eval set -- "$PARSED_ARGUMENTS"
 
@@ -61,18 +59,8 @@ while true; do
     -r|--recursive) recursive=1; shift;;
     -h|--help) help_message; exit 0;;
     -u|--include-uncategorized) uncategorized=1; shift;;
-    -R|--remove-originals)
-        echo "You have opted to remove original files. Are you sure? (y/n)"
-        read confirmation
-        if [[ $confirmation == "y" || $confirmation == "Y" ]]; then
-            remove_originals=1 
-        else
-            echo "Cancelling operation.."
-            exit
-        fi
-        shift;;
     -d|--dry-run) dry_run=1; shift;;
-    -O|--overwrite) overwrite=1; shift;;
+    -S|--skip-duplicates) skip_duplicates=1; shift;;
     --) shift; break;;
     *) echo "Invalid option -$OPTARG" >&2; exit 1;;
   esac
@@ -84,7 +72,7 @@ if [[ ! -d $source_path ]]; then
   exit 1
 fi
 
-# Check if output path is a directory
+# Check if output path is a directory, and if not, try to create it
 if [[ ! -d $output_path ]]; then
   message="Created directory $output_path"
   if [[ $dry_run -eq 0 ]]; then
@@ -99,10 +87,7 @@ if [[ ! -d $output_path ]]; then
   fi
 fi
 
-
 # Create array with ignored prefixes
-## BUG! When there is no ignore.txt and a file does not have a datetime
-## it is being ignored. Like having "null" in the ignore.txt is the date.
 ignore_file="$source_path/ignore.txt"
 ignore_list=()
 if [[ -f $ignore_file ]]; then
@@ -147,26 +132,31 @@ log "Starting operation..."
 # Iterate over each file in the list
 for file in "${file_list[@]}"; do
   ((count++))
+
+  # Parse its original Datetime
   datetime=$(exiftool -s3 -d "$datetime_format" -DateTimeOriginal "$file")
 
-  # Skip if file is in ignore list
-  if [[ " ${ignore_list[@]} " =~ " ${datetime} " ]]; then
-      log "Ignored $file due to entry in ignore.txt ($count/$total_files)"
+  # Skip if file is in ignore list and datetime is not empty
+  if [[ -n "$datetime" ]] && [[ " ${ignore_list[@]} " =~ " ${datetime} " ]]; then
+    log "Ignored $file due to entry in ignore.txt ($count/$total_files)"
     ((skipped_ignore_txt++))
     continue
   fi
 
+  # Handle files with empty datetimes: if -u is used, it will move them 
+  # in an "uncategorized" folder in the output, using the same relative
+  # path as in the source
   if [[ "$datetime" == "" ]]; then
     if [[ $uncategorized -eq 1 ]]; then
       relative_dir="${file%/*}"
       relative_path="${relative_dir#$source_path/}"
       output_dir="$output_path/uncategorized/$relative_path"
-      message="$file ---> $output_dir ($count/$total_files)"
-      
+
       if [[ ! -d "$output_dir" && $dry_run -eq 0 ]]; then
         mkdir -p "$output_dir"
       fi
   
+      message="$file ---> $output_dir ($count/$total_files)"
       if [[ $dry_run -eq 0 ]]; then
         cp -n "$file" "$output_dir"
         log "$message"
@@ -174,12 +164,15 @@ for file in "${file_list[@]}"; do
         log "$message (dryrun)"
       fi
     else
+      # No -u flag is used; skip
       log "Skipped $file due to lack of DateTimeOriginal ($count/$total_files)" 
       ((skipped_no_datetime++))
     fi
     continue
   fi
 
+  # Now datetime is not empty; we format it according to $subdir_format
+  # and use this as our output subdirectory name
   output_subdir=$(exiftool -s3 -d "$subdir_format" -DateTimeOriginal "$file")
 
   # Check if output subdirectory exists, create it if not
@@ -192,8 +185,10 @@ for file in "${file_list[@]}"; do
 
   # Check if target file already exists
   target_path="$output_path/$output_subdir/$new_name"
+
   if [[ -e "$target_path" ]]; then
-    if [[ $overwrite -eq 0 ]]; then # if overwrite is set to 0, use the new behavior
+    if [[ $skip_duplicates -eq 0 ]]; then 
+      # if skip_duplicates is set to 0 (the default behaviour), use a checksum suffix to differentiate if the file is different
       original_checksum=$(md5sum "$file" | cut -d " " -f 1)
       target_checksum=$(md5sum "$target_path" | cut -d " " -f 1)
   
@@ -203,36 +198,45 @@ for file in "${file_list[@]}"; do
         ((skipped_target_exists++))
         continue
       else
-        # Use the last 6 characters of the md5 checksum as a suffix for the new filename
+        # Use the last 8 characters of the md5 checksum as a suffix for the new filename
         suffix="${original_checksum: -8}"
         new_name="${datetime,,}_$suffix.$(echo $ext | awk '{print tolower($0)}')"
         target_path="$output_path/$output_subdir/$new_name"
       fi
-    else
+    else # skip_duplicates is set to 1
       log "Skipped $file due to existing target file ($count/$total_files)"
       ((skipped_target_exists++))
       continue
     fi
   fi
 
-  if [[ $remove_originals -eq 0 ]]; then
-    if [[ $dry_run -eq 0 ]]; then
-      message="$file ---> $target_path ($count/$total_files)"
-      cp -n "$file" "$target_path"
-      log "$message"
-      ((renamed++))
-    else
-      log "$message (dryrun)"
-    fi
+  # Now let's do the copying
+  message="$file ---> $target_path ($count/$total_files)"
+  if [[ $dry_run -eq 0 ]]; then
+    cp -n "$file" "$target_path"
+    log "$message"
+    ((renamed++))
   else
-    if [[ $dry_run -eq 0 ]]; then
-      mv -n "$file" "$target_path"
-      log "$message"
-      ((renamed++))
-    else
-      log "$message (dryrun)"
+    log "$message (dryrun)"
+  fi
+
+  # Check if there exists a .xmp file with the same base name for files with extensions in extensions_raw
+  if [[ " ${extensions_raw[@]} " =~ "${ext,,}" ]]; then
+    base_name=${file%.*}
+    xmp_file="${base_name}.xmp"
+    if [[ -f $xmp_file ]]; then
+      xmp_target_path="${target_path%.*}.xmp"
+      message="$xmp_file ---> $xmp_target_path"
+      # Copy the .xmp file to the same target location
+      if [[ $dry_run -eq 0 ]]; then
+        cp -n "$xmp_file" "$xmp_target_path"
+        log "$message"
+      else
+        log "$message (dryrun)"
+      fi
     fi
   fi
+
 done
 
 # Calculate time elapsed
