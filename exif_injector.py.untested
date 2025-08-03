@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""
+exif_injector.py
+
+Scan a source directory for media files lacking EXIF/QuickTime timestamps,
+parse common filename-based timestamps, inject them via ExifTool, and
+copy or move the tagged files into an 'exif_tagged' tree under the
+output directory, preserving relative paths.
+
+Usage:
+    python exif_injector.py \
+      --source-path /path/to/source \
+      --output-path /path/to/output \
+      [--recursive] [--move]
+
+"""
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+# List of (regex, strptime_format) for filename timestamps
+TIMESTAMP_PATTERNS = [
+    # YYYYMMDD[-_]HHMMSS
+    (re.compile(r"(\d{8})[-_]?([0-9]{6})"), "%Y%m%d%H%M%S"),
+    # YYYY-MM-DD_HH.MM.SS
+    (re.compile(r"(\d{4})-(\d{2})-(\d{2})[_ ](\d{2})\.(\d{2})\.(\d{2})"), "%Y-%m-%d %H.%M.%S"),
+    # Add more patterns here as needed
+]
+
+# Supported extensions
+EXTENSIONS = {"cr2", "raf", "jpg", "mov", "avi", "png", "wmv", "mp4", "vob"}
+VIDEO_EXTS = {"mov", "mp4"}
+
+
+def has_existing_timestamp(path):
+    """
+    Return True if the file already has DateTimeOriginal or CreateDate tags.
+    """
+    try:
+        out = subprocess.check_output([
+            "exiftool", "-s3", "-DateTimeOriginal", "-CreateDate", path
+        ], stderr=subprocess.DEVNULL).decode().strip()
+        return bool(out)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def inject_timestamp(path, dt, is_video):
+    """
+    Use ExifTool to write the datetime into the file.
+    dt should be a datetime object.
+    """
+    qt_ts = dt.strftime("%Y:%m:%d %H:%M:%S")
+    cmd = ["exiftool", "-overwrite_original"]
+    if is_video:
+        cmd += [
+            f"-CreateDate={qt_ts}",
+            f"-MediaCreateDate={qt_ts}",
+            f"-TrackCreateDate={qt_ts}"
+        ]
+    else:
+        cmd += [f"-DateTimeOriginal={qt_ts}"]
+    cmd.append(path)
+    subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def parse_filename_timestamp(filename):
+    """
+    Try each pattern; return a datetime if matched, else None.
+    """
+    for regex, fmt in TIMESTAMP_PATTERNS:
+        m = regex.search(filename)
+        if m:
+            # build a single string for strptime based on groups
+            grp = ''.join(m.groups())
+            # for patterns where groups are separate date and time,
+            # ensure we combine correctly for the fmt
+            try:
+                return datetime.strptime(grp, fmt)
+            except ValueError:
+                # fallback: try full match
+                try:
+                    return datetime.strptime(m.group(0), fmt)
+                except ValueError:
+                    continue
+    return None
+
+
+def main():
+    p = argparse.ArgumentParser(description="Inject exif timestamps from filenames.")
+    p.add_argument("-s", "--source-path", required=True)
+    p.add_argument("-o", "--output-path", required=True)
+    p.add_argument("-r", "--recursive", action="store_true")
+    p.add_argument("-m", "--move", action="store_true")
+    args = p.parse_args()
+
+    src = os.path.abspath(args.source_path)
+    out = os.path.abspath(args.output_path)
+    base_out = os.path.join(out, "exif_tagged")
+
+    if not os.path.isdir(src):
+        print(f"Error: source path '{src}' is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    os.makedirs(base_out, exist_ok=True)
+
+    # gather files
+    files = []
+    if args.recursive:
+        for root, _, fnames in os.walk(src):
+            for fn in fnames:
+                ext = fn.lower().split('.')[-1]
+                if ext in EXTENSIONS:
+                    files.append(os.path.join(root, fn))
+    else:
+        for fn in os.listdir(src):
+            ext = fn.lower().split('.')[-1]
+            if ext in EXTENSIONS:
+                files.append(os.path.join(src, fn))
+
+    total = len(files)
+    count = tagged = skipped_exif = skipped_nomatch = failed = 0
+    start = time.time()
+
+    for path in files:
+        count += 1
+        fn = os.path.basename(path)
+        print(f"Processing ({count}/{total}): {path}")
+
+        if has_existing_timestamp(path):
+            skipped_exif += 1
+            continue
+
+        dt = parse_filename_timestamp(fn)
+        if not dt:
+            skipped_nomatch += 1
+            continue
+
+        is_video = fn.lower().split('.')[-1] in VIDEO_EXTS
+        try:
+            inject_timestamp(path, dt, is_video)
+        except Exception as e:
+            print(f"Failed tagging '{path}': {e}")
+            failed += 1
+            continue
+
+        # copy or move
+        rel = os.path.relpath(path, src)
+        dest_dir = os.path.join(base_out, os.path.dirname(rel))
+        os.makedirs(dest_dir, exist_ok=True)
+        try:
+            if args.move:
+                shutil.move(path, dest_dir)
+            else:
+                shutil.copy2(path, dest_dir)
+            tagged += 1
+        except Exception as e:
+            print(f"Failed to {'move' if args.move else 'copy'} '{path}': {e}")
+            failed += 1
+
+    elapsed = time.time() - start
+    print("\nSummary:")
+    print(f"  Total processed: {total}")
+    print(f"  Tagged:           {tagged}")
+    print(f"  Skipped (EXIF):   {skipped_exif}")
+    print(f"  Skipped (no fmt): {skipped_nomatch}")
+    print(f"  Failed:           {failed}")
+    print(f"  Time elapsed:     {int(elapsed//3600)}h {int((elapsed%3600)//60)}m {int(elapsed%60)}s")
+
+if __name__ == '__main__':
+    main()
